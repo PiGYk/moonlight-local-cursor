@@ -144,16 +144,22 @@ with `--listen`, `--allow` and your firewall.
 
 ## Prior art
 
-"Cursor protocol v2" by jtsorlinis carries the cursor inside Moonlight's own stream and can switch mouse modes
-automatically. It needs a Windows host: [Vibeshine PR #367](https://github.com/Nonary/vibeshine/pull/367) (host),
-[qiin2333/moonlight-qt PR #283](https://github.com/qiin2333/moonlight-qt/pull/283) (client). This project is a side
-channel for Linux hosts that needs no rebuild of Sunshine or Moonlight.
+Drawing the host's cursor natively on the client needs protocol changes on both sides, as the Moonlight developers
+note in [moonlight-qt #1929](https://github.com/moonlight-stream/moonlight-qt/issues/1929). "Cursor protocol v2" by
+jtsorlinis carries the cursor inside the stream and can switch mouse modes automatically, for Windows hosts:
+[Vibeshine PR #367](https://github.com/Nonary/vibeshine/pull/367) (host, open). Its moonlight-qt client,
+[qiin2333/moonlight-qt PR #283](https://github.com/qiin2333/moonlight-qt/pull/283), was closed in October 2026. This
+project is a side channel for Linux hosts and works with stock Sunshine and Moonlight.
 
 ## Tested with
 
 Sunshine 2026.914 on Nobara Linux 44 (labwc with wlroots 0.20, NVIDIA RTX 4070, KMS capture), Moonlight-qt 6.2.0
 AppImage on MX Linux (Debian 13, Xfce, X11), Divinity: Original Sin 2 under Proton, over WireGuard.
 Reports from other setups are welcome.
+
+## How it was made
+
+The code was written with an AI coding assistant (Claude) and tested on the hardware listed above.
 
 ## License
 

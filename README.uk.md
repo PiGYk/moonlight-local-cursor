@@ -103,6 +103,12 @@ cd moonlight-local-cursor
 його в локальній мережі або VPN. За замовчуванням ПК пускає лише приватні адреси й localhost; звужуйте через
 `--listen`, `--allow` і брандмауер.
 
+## Як це зроблено
+
+Код написано з ШІ-асистентом (Claude). Перевірено на Sunshine 2026.914, Nobara Linux 44 (labwc, wlroots 0.20, NVIDIA
+RTX 4070, KMS-захоплення) і Moonlight-qt 6.2.0 (AppImage) на MX Linux (Xfce, X11) з Divinity: Original Sin 2 під
+Proton через WireGuard.
+
 ## Ліцензія
 
 MIT
