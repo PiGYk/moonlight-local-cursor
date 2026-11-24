@@ -33,9 +33,9 @@ host (Linux, Sunshine, X11 or Wayland + XWayland)        client (Linux, Moonligh
 ┌───────────────────────────────────────────┐            ┌───────────────────────────────────────────┐
 │ game (Proton/Wine/X11) sets an X cursor   │            │ mlc-client.py                             │
 │ mlc-host.py                               │  TCP 48100 │  · finds Moonlight's stream window        │
-│  · XFixes: cursor shape + hotspot  ───────┼───────────►│  · puts an InputOnly window over it       │
-│  · XFixesHideCursor: no cursor on the     │            │  · gives it the host's cursor shape       │
-│    host screen or in Sunshine's capture   │            │    (scaled like the stream, ≥ 24 px)      │
+│  · XFixes: cursor shape + hotspot  ───────┼───────────►│  · gives it the host's cursor shape       │
+│  · XFixesHideCursor: no cursor on the     │            │    (XInput 2 device cursor, scaled like   │
+│    host screen or in Sunshine's capture   │            │    the stream, ≥ 24 px)                   │
 │  · 1x1 scanout blocker while streaming    │            │  Moonlight sends absolute mouse positions │
 └───────────────────────────────────────────┘            └───────────────────────────────────────────┘
 ```
@@ -45,9 +45,11 @@ host (Linux, Sunshine, X11 or Wayland + XWayland)        client (Linux, Moonligh
   then hands the compositor an empty cursor, so Sunshine never captures it, whether the compositor uses a hardware
   cursor plane or draws the cursor into the frame. When the last client leaves, or the service stops, the cursor
   comes back on its own.
-- **Client** (`client/mlc-client.py`): plain Python with libX11 and libXcursor through ctypes. The local X server
-  draws the cursor. The InputOnly window selects no events, so clicks and motion reach Moonlight untouched. When
-  Moonlight recreates its window (renderer switch, resize), the helper follows.
+- **Client** (`client/mlc-client.py`): plain Python with libX11, libXi and libXcursor through ctypes. The local X
+  server draws the cursor. It is a per-device cursor on Moonlight's own stream window (XInput 2 `XIDefineCursor`),
+  which outranks the blank cursor SDL sets there, and nothing of ours covers the stream, so clicks, motion and the
+  scroll wheel reach Moonlight untouched. (1.0 used an InputOnly child window; with SDL 3 on Xorg that broke the
+  scroll wheel.) When Moonlight recreates its window (renderer switch, resize), the helper follows.
 
 The wire protocol is in [PROTOCOL.md](PROTOCOL.md). It is small enough for a Windows, macOS or Android client.
 
@@ -57,8 +59,8 @@ The wire protocol is in [PROTOCOL.md](PROTOCOL.md). It is small enough for a Win
 on X11); Python 3 with `python-xlib`; a systemd user session.
 
 **Client:** Linux with Moonlight (native, Flatpak or AppImage) running on X11 or XWayland; Python 3, `libX11`,
-`libXcursor`. Moonlight must be in **absolute mouse mode**: *Settings → Optimize mouse for remote desktop instead of
-games*.
+`libXi`, `libXcursor`. Moonlight must be in **absolute mouse mode**: *Settings → Optimize mouse for remote desktop
+instead of games*.
 
 ## Install
 

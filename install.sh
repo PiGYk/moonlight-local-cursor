@@ -163,8 +163,8 @@ install_client() {
         esac
     done
     need_python
-    python3 -c 'import ctypes; ctypes.CDLL("libX11.so.6"); ctypes.CDLL("libXcursor.so.1")' 2>/dev/null \
-        || die "libX11 and libXcursor are required (packages libx11 / libxcursor)"
+    python3 -c 'import ctypes; ctypes.CDLL("libX11.so.6"); ctypes.CDLL("libXi.so.6"); ctypes.CDLL("libXcursor.so.1")' \
+        2>/dev/null || die "libX11, libXi and libXcursor are required (packages libx11 / libxi / libxcursor)"
 
     mkdir -p "$PREFIX" "$(dirname "$AUTOSTART")"
     install -m 755 "$HERE/client/mlc-client.py" "$PREFIX/mlc-client.py"

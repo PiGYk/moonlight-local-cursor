@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """moonlight-local-cursor client: show the host's game cursor as a native local cursor in Moonlight (X11).
 
-Finds Moonlight's stream window, puts an invisible InputOnly window over it and gives that window a cursor with the
-shape the host sends (shape, hotspot and "hidden" come from mlc-host.py). The local X server draws the cursor, so it
-moves with no stream latency, and the host keeps it out of the video while we are connected. The InputOnly window
-selects no events: clicks and motion go to Moonlight untouched.
+Finds Moonlight's stream window and gives it a cursor with the shape the host sends (shape, hotspot and "hidden" come
+from mlc-host.py). The local X server draws the cursor, so it moves with no stream latency, and the host keeps it out
+of the video while we are connected. The cursor is set per pointer device (XInput 2 XIDefineCursor): that outranks
+the window's own cursor, so the blank one SDL puts there does not hide ours, and no window of ours covers the stream.
+Clicks, motion and the scroll wheel go to Moonlight untouched.
 
-No dependencies beyond libX11 and libXcursor (ctypes). Works under X11 and XWayland; on a Wayland session run
+Up to 1.0 the cursor sat on an InputOnly child window over the stream. With the pointer inside a child, each wheel
+step's emulated button press makes the X server send Moonlight's window an Enter event (the implicit grab moves the
+pointer from the child to the window), and SDL 3 restarts its smooth-scroll tracking on every Enter: on Xorg every
+step was dropped, the wheel did nothing.
+
+No dependencies beyond libX11, libXi and libXcursor (ctypes). Works under X11 and XWayland; on a Wayland session run
 Moonlight under XWayland (QT_QPA_PLATFORM=xcb SDL_VIDEODRIVER=x11). Moonlight must be in absolute mouse mode
 ("Optimize mouse for remote desktop instead of games"), otherwise the local and the remote cursor drift apart.
 
@@ -19,6 +25,7 @@ import fcntl
 import json
 import os
 import select
+import signal
 import socket
 import struct
 import sys
@@ -131,6 +138,7 @@ def moonlight_addresses(conf_text, host_name):
 # ---------- X11 through ctypes ----------
 x11 = ctypes.CDLL("libX11.so.6")
 xcursor = ctypes.CDLL("libXcursor.so.1")
+xi = ctypes.CDLL("libXi.so.6")
 Window = Atom = Cursor = c_ulong
 
 
@@ -149,6 +157,11 @@ class XcursorImage(Structure):
                 ("xhot", c_uint), ("yhot", c_uint), ("delay", c_uint), ("pixels", POINTER(c_uint))]
 
 
+class XIDeviceInfo(Structure):
+    _fields_ = [("deviceid", c_int), ("name", c_char_p), ("use", c_int), ("attachment", c_int), ("enabled", c_int),
+                ("num_classes", c_int), ("classes", c_void_p)]
+
+
 ERROR_HANDLER = ctypes.CFUNCTYPE(c_int, c_void_p, c_void_p)
 for fname, restype, argtypes in [
     ("XOpenDisplay", c_void_p, [c_char_p]),
@@ -160,12 +173,6 @@ for fname, restype, argtypes in [
                            POINTER(c_uint)]),
     ("XFree", c_int, [c_void_p]),
     ("XSelectInput", c_int, [c_void_p, Window, c_long]),
-    ("XCreateWindow", Window, [c_void_p, Window, c_int, c_int, c_uint, c_uint, c_uint, c_int, c_uint, c_void_p,
-                               c_ulong, c_void_p]),
-    ("XMapWindow", c_int, [c_void_p, Window]),
-    ("XDestroyWindow", c_int, [c_void_p, Window]),
-    ("XResizeWindow", c_int, [c_void_p, Window, c_uint, c_uint]),
-    ("XDefineCursor", c_int, [c_void_p, Window, Cursor]),
     ("XFreeCursor", c_int, [c_void_p, Cursor]),
     ("XGetWindowAttributes", c_int, [c_void_p, Window, POINTER(XWindowAttributes)]),
     ("XPending", c_int, [c_void_p]),
@@ -182,18 +189,24 @@ xcursor.XcursorImageCreate.argtypes = [c_int, c_int]
 xcursor.XcursorImageLoadCursor.restype = Cursor
 xcursor.XcursorImageLoadCursor.argtypes = [c_void_p, POINTER(XcursorImage)]
 xcursor.XcursorImageDestroy.argtypes = [POINTER(XcursorImage)]
+for fname, restype, argtypes in [
+    ("XIQueryVersion", c_int, [c_void_p, POINTER(c_int), POINTER(c_int)]),
+    ("XIQueryDevice", POINTER(XIDeviceInfo), [c_void_p, c_int, POINTER(c_int)]),
+    ("XIFreeDeviceInfo", None, [POINTER(XIDeviceInfo)]),
+    ("XIDefineCursor", c_int, [c_void_p, c_int, Window, Cursor]),
+    ("XIUndefineCursor", c_int, [c_void_p, c_int, Window]),
+]:
+    f = getattr(xi, fname)
+    f.restype, f.argtypes = restype, argtypes
 
 STRUCTURE_NOTIFY_MASK, PROPERTY_CHANGE_MASK = 1 << 17, 1 << 22
 DESTROY_NOTIFY, UNMAP_NOTIFY, MAP_NOTIFY, CONFIGURE_NOTIFY, PROPERTY_NOTIFY = 17, 18, 19, 22, 28
-INPUT_ONLY, IS_VIEWABLE = 2, 2
-
-X_ERRORS = []
-
+IS_VIEWABLE = 2
+XI_ALL_MASTER_DEVICES, XI_MASTER_POINTER = 1, 1
 
 @ERROR_HANDLER
 def _on_x_error(_dpy, _event):
     # Windows vanish between requests (Moonlight closed one): Xlib's default handler would exit the process.
-    X_ERRORS.append(time.monotonic())
     return 0
 
 
@@ -203,6 +216,9 @@ class Screen:
         if not self.dpy:
             sys.exit("moonlight-local-cursor: cannot open the X display (is DISPLAY set?)")
         x11.XSetErrorHandler(_on_x_error)
+        major, minor = c_int(2), c_int(0)
+        if xi.XIQueryVersion(self.dpy, byref(major), byref(minor)) != 0:
+            sys.exit("moonlight-local-cursor: the X server has no XInput 2")
         self.root = x11.XDefaultRootWindow(self.dpy)
         self.atoms = {}
         x11.XSelectInput(self.dpy, self.root, PROPERTY_CHANGE_MASK)
@@ -290,6 +306,26 @@ class Screen:
         finally:
             xcursor.XcursorImageDestroy(img)
 
+    def pointers(self):
+        """Master pointers (normally just "Virtual core pointer"): a device cursor is set for each of them."""
+        count = c_int()
+        infos = xi.XIQueryDevice(self.dpy, XI_ALL_MASTER_DEVICES, byref(count))
+        if not infos:
+            return []
+        try:
+            return [infos[i].deviceid for i in range(count.value) if infos[i].use == XI_MASTER_POINTER]
+        finally:
+            xi.XIFreeDeviceInfo(infos)
+
+    def set_cursor(self, window, cursor):
+        """Our cursor on the window for every master pointer; None takes it off and the window's own shows again."""
+        for device in self.pointers():
+            if cursor is None:
+                xi.XIUndefineCursor(self.dpy, device, window)
+            else:
+                xi.XIDefineCursor(self.dpy, device, window, cursor)
+        x11.XFlush(self.dpy)
+
     def events(self):
         ev = (c_long * 24)()
         while x11.XPending(self.dpy):
@@ -311,7 +347,7 @@ class Helper:
         self.window = None           # Moonlight's stream window
         self.size = (0, 0)
         self.host_name = None
-        self.layer = None            # our InputOnly window inside it
+        self.attached = False        # our cursor is on the stream window
         self.sock = None
         self.buffer = b""
         self.host = None             # {"width", "height"} from the host
@@ -345,50 +381,37 @@ class Helper:
             return
         if self.window is not None:
             self.log(f"stream window recreated: {self.window:#x} → {window:#x}")
-            self.remove_layer()
+            self.detach()
         if self.sock and host_name != self.host_name and not self.args.host:
             self.disconnect(f"now streaming from {host_name!r}")
         self.window, self.size, self.host_name, self.window_lost_at = window, (width, height), host_name, None
         x11.XSelectInput(self.x.dpy, window, STRUCTURE_NOTIFY_MASK)
         self.log(f"stream window {window:#x} {width}x{height}, host {host_name!r}")
         if self.host:
-            self.add_layer()
+            self.attach()
             self.apply()
 
     def lose_window(self, reason):
         self.log(f"no stream window ({reason})")
-        self.remove_layer()          # a closed window took our layer with it; a hidden one we clean up ourselves
+        self.detach()                # a closed window took our cursor with it; a hidden one we clean up ourselves
         self.window = None
         self.window_lost_at = time.monotonic()
         self.next_search = 0.0
 
     def resize(self, size):
         self.size = size
-        if self.layer:
-            x11.XResizeWindow(self.x.dpy, self.layer, max(1, size[0]), max(1, size[1]))
         self.log(f"stream window {size[0]}x{size[1]}")
-        self.apply()
+        self.apply()                 # the cursor is scaled like the picture
 
-    def add_layer(self):
-        if not self.window or self.layer:
-            return
-        width, height = self.size
-        errors = len(X_ERRORS)
-        layer = x11.XCreateWindow(self.x.dpy, self.window, 0, 0, max(1, width), max(1, height), 0, 0,
-                                  INPUT_ONLY, None, 0, None)
-        x11.XMapWindow(self.x.dpy, layer)
-        x11.XSync(self.x.dpy, 0)
-        if len(X_ERRORS) != errors:
-            self.lose_window("the window vanished while adding the cursor layer")
-            return
-        self.layer = layer
-        self.log(f"cursor layer {layer:#x}")
+    def attach(self):
+        if self.window and not self.attached:
+            self.attached = True
+            self.log(f"our cursor on stream window {self.window:#x}")
 
-    def remove_layer(self):
-        if self.layer:
-            x11.XDestroyWindow(self.x.dpy, self.layer)
-            self.layer = None
-        x11.XFlush(self.x.dpy)
+    def detach(self):
+        if self.attached and self.window:
+            self.x.set_cursor(self.window, None)
+        self.attached = False
 
     # --- cursor ---
     def free_cursors(self):
@@ -401,7 +424,7 @@ class Helper:
         return round(cursor_scale(video_w, self.host["width"], shape[1], shape[2], self.args.scale), 3)
 
     def apply(self):
-        if not (self.layer and self.host and self.current is not None):
+        if not (self.attached and self.host and self.current is not None):
             return
         if self.current == 0 or self.current not in self.shapes:
             if self.empty is None:
@@ -415,8 +438,7 @@ class Helper:
                 pixels, width, height = resample(shape[0], shape[1], shape[2], k)
                 cursor = self.cursors[(self.current, k)] = self.x.make_cursor(
                     pixels, width, height, round(shape[3] * k), round(shape[4] * k))
-        x11.XDefineCursor(self.x.dpy, self.layer, cursor)
-        x11.XFlush(self.x.dpy)
+        self.x.set_cursor(self.window, cursor)
 
     # --- network ---
     def candidates(self):
@@ -454,7 +476,7 @@ class Helper:
         self.sock, self.buffer, self.host, self.current = None, b"", None, None
         self.shapes.clear()
         self.free_cursors()
-        self.remove_layer()          # without the host the cursor is back in the video: do not draw ours
+        self.detach()                # without the host the cursor is back in the video: do not draw ours
         self.next_connect = time.monotonic() + 1
 
     def receive(self):
@@ -481,7 +503,7 @@ class Helper:
             if self.host["width"] <= 0 or self.host["height"] <= 0:
                 raise ValueError(f"output size {self.host}")
             self.free_cursors()          # scale depends on the output size
-            self.add_layer()
+            self.attach()
             self.apply()
         elif kind == b"F":
             shape_id, width, height, xhot, yhot = struct.unpack_from(">IHHHH", payload)
@@ -559,6 +581,13 @@ def main():
             print("moonlight-local-cursor: already running on this display", file=sys.stderr)
         return
     helper = Helper(args)
+
+    def stop(*_):
+        helper.disconnect("stopped")     # a device cursor outlives its client: take ours off Moonlight's window
+        sys.exit(0)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, stop)
     while True:
         helper.step()
 

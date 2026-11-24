@@ -5,10 +5,7 @@ when a client connected, and mouse clicks stopped reaching the game.
 """
 import importlib.util
 import pathlib
-import shutil
-import subprocess
 
-import pytest
 from Xlib import Xatom, Xutil, display
 from Xlib.ext import shape
 
@@ -20,19 +17,6 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-@pytest.fixture
-def xvfb():
-    if not shutil.which("Xvfb"):
-        pytest.skip("Xvfb not installed")
-    proc = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "640x480x24", "-nolisten", "tcp"],
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    try:
-        yield ":" + proc.stdout.readline().decode().strip()
-    finally:
-        proc.terminate()
-        proc.wait()
 
 
 def test_blocker_never_wants_focus(xvfb):

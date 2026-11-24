@@ -29,9 +29,11 @@ Steam Remote Play передає клієнту *форму* курсора, і 
   підключений хоч один клієнт, курсор над X-вікнами схований (`XFixesHideCursor`). XWayland віддає композитору
   порожній курсор, і в захоплення Sunshine він не потрапляє, хоч би як композитор його малював. Відключився останній
   клієнт або зупинилась служба — курсор повертається сам.
-- **Клієнт** (`client/mlc-client.py`) — чистий Python, libX11 і libXcursor через ctypes. Курсор малює X-сервер
-  клієнта. Невидиме InputOnly-вікно подій не вибирає, тож клацання й рух доходять до Moonlight як були. Moonlight
-  перестворює вікно (зміна рушія, розмір) — помічник переходить у нове.
+- **Клієнт** (`client/mlc-client.py`) — чистий Python, libX11, libXi і libXcursor через ctypes. Курсор малює
+  X-сервер клієнта: це курсор пристрою на самому вікні трансляції Moonlight (XInput 2, `XIDefineCursor`), він
+  сильніший за порожній курсор, який туди ставить SDL. Над трансляцією нашого нічого нема, тож клацання, рух і колесо
+  доходять до Moonlight як були (у 1.0 було дочірнє InputOnly-вікно, і з SDL 3 під Xorg колесо не працювало).
+  Moonlight перестворює вікно (зміна рушія, розмір) — помічник переходить у нове.
 
 Протокол — у [PROTOCOL.md](PROTOCOL.md), він маленький, клієнт під Windows, macOS чи Android написати нескладно.
 
@@ -41,8 +43,8 @@ Steam Remote Play передає клієнту *форму* курсора, і 
 `python-xlib`; користувацька сесія systemd.
 
 **Клієнт:** Linux і Moonlight (звичайний, Flatpak або AppImage) під X11 або XWayland; Python 3, `libX11`,
-`libXcursor`. Moonlight має бути в **абсолютному режимі миші**: *Налаштування → Optimize mouse for remote desktop
-instead of games*.
+`libXi`, `libXcursor`. Moonlight має бути в **абсолютному режимі миші**: *Налаштування → Optimize mouse for remote
+desktop instead of games*.
 
 ## Встановлення
 
