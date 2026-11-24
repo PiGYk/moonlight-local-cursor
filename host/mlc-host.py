@@ -33,7 +33,7 @@ import sys
 import time
 import zlib
 
-from Xlib import X, display
+from Xlib import X, Xatom, Xutil, display
 from Xlib import error as xerror
 from Xlib.ext import shape, xfixes
 
@@ -201,6 +201,12 @@ class XSession:
                                           colormap=colormap, override_redirect=True)
             window.shape_rectangles(shape.SO.Set, shape.SK.Input, X.Unsorted, 0, 0, [])  # clicks pass through
             window.set_wm_name("moonlight-local-cursor scanout blocker")
+            # wlroots compositors (labwc, sway) hand keyboard focus to a newly mapped override-redirect window unless
+            # its type says it never wants it; on labwc 0.20 the 1.0 blocker took focus from the game and mouse clicks
+            # stopped reaching it. A notification is never focused, and the input hint says the same to the rest.
+            window.change_property(self.d.intern_atom("_NET_WM_WINDOW_TYPE"), Xatom.ATOM, 32,
+                                   [self.d.intern_atom("_NET_WM_WINDOW_TYPE_NOTIFICATION")])
+            window.set_wm_hints(flags=Xutil.InputHint, input=0)
             window.map()
             self.blocker = (window, colormap)
         elif not on and self.blocker:
